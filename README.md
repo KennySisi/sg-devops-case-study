@@ -67,11 +67,13 @@ Network reachability and authorization are both required. A Private Endpoint doe
 
 ### Private DNS
 
-Corporate DNS conditionally forwards Azure private service queries to the Azure DNS Private Resolver in the hub:
+Private DNS is used to support Private Endpoint connectivity for the workload services.
 
-`Corporate DNS → Conditional Forwarding → Azure DNS Private Resolver → Private DNS Zones → Private Endpoint IP`
+Private DNS Zones are centrally managed and linked to the workload VNets where required. When a Private Endpoint is created, the corresponding service DNS record is associated with the appropriate privatelink zone.
 
-The Private DNS Zones are linked to the workload spokes. The internal application name, for example `ai.slatergordon.com`, resolves to the Application Gateway private frontend IP. Backend applications continue using standard Azure service FQDNs, which resolve through their `privatelink` zones to the corresponding Private Endpoint addresses.
+Applications continue to use the standard Azure service FQDNs. DNS resolution maps those names to the Private Endpoint IP addresses, so traffic reaches services such as App Service, Storage, Key Vault, Cosmos DB and ACR over private network paths.
+
+For the internal application entry point, ai.slatergordon.com resolves to the private frontend IP of Application Gateway.
 
 ### Ingress and Egress
 
@@ -186,6 +188,8 @@ This design uses ephemeral self-hosted runners for those jobs. The trade-off is 
 
 GitHub-hosted runners with Azure private networking are a valid alternative if supported by the organisation's GitHub setup.
 
+The final choice would depend on the organisation’s GitHub plan, security policy, cost and platform standards.
+
 ### Environment Isolation vs Cost
 
 Development, UAT and Production maintain separate identities, data, Terraform state and deployment controls.
@@ -196,11 +200,12 @@ This reduces blast radius and creates a clear Production boundary, but duplicate
 
 Key items requiring confirmation before Production are:
 
-- corporate DNS forwarding and centrally managed zone links;
-- the organisation-specific private runner model;
-- final regional service, AI model and quota availability;
-- Azure AI Foundry and Azure Machine Learning outbound dependencies;
-- employee authentication and APIM-to-Backend application authorization; and
-- business requirements for data handling, availability, backup, RTO/RPO and disaster recovery.
+- Corporate DNS forwarding and private DNS integration with the existing enterprise network.
+- Regional availability, model availability and quota for Azure AI Foundry and Azure Machine Learning.
+- Final employee authentication and APIM-to-Backend authorization design.
+
+Known limitations of this case-study scaffold:
+- The repository provides representative Terraform modules and CI/CD workflows rather than a complete Production implementation.
+- Backup, disaster recovery, RTO/RPO and full operational controls are not implemented in this lightweight design.
 
 The design intentionally documents these dependencies rather than claiming unsupported Production completeness.
