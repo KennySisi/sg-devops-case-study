@@ -176,36 +176,31 @@ Updating the App Service image reference uses the Azure control plane. The App S
 
 ### APIM Standard v2 vs Premium v2
 
-Standard v2 is selected because its inbound Gateway Private Endpoint and outbound VNet Integration meet the required traffic pattern at lower cost.
+Standard v2 is selected because its inbound Private Endpoint and outbound VNet Integration meet the current requirements at lower cost.
 
-The trade-off is a composite networking model that requires Private DNS, Private Endpoint and integration-subnet configuration. Premium v2 provides a more fully injected networking model, but its additional cost and isolation are not justified by the current workload requirements.
+The trade-off is a more complex networking model. Premium v2 provides a more fully integrated VNet model, but at higher cost.
 
 ### Private Deployment Runner
 
-Private-only ACR and internal application endpoints require selected CI/CD jobs to have Azure private network connectivity.
+GitHub-hosted runners with Azure private networking are the preferred option because they can access private ACR and internal endpoints with less runner-management overhead.
 
-This design uses ephemeral self-hosted runners for those jobs. The trade-off is additional responsibility for runner lifecycle, patching, scaling, DNS and outbound access.
-
-GitHub-hosted runners with Azure private networking are a valid alternative if supported by the organisation's GitHub setup.
+The trade-off is less infrastructure control and dependency on the organisation's GitHub plan and platform standards. Self-hosted runners provide more control but require more maintenance.
 
 The final choice would depend on the organisation’s GitHub plan, security policy, cost and platform standards.
 
 ### Environment Isolation vs Cost
 
-Development, UAT and Production maintain separate identities, data, Terraform state and deployment controls.
+Development, UAT and Production use separate workload resources, identities and data.
 
-This reduces blast radius and creates a clear Production boundary, but duplicates workload resources and increases cost. Enterprise hub, DNS, policy and monitoring services remain shared.
+This reduces blast radius and provides a stronger Production boundary, but increases resource duplication and cost.
 
 ## 7. Known Risks and Limitations
 
-Key items requiring confirmation before Production are:
+Key Considerations Before Production:
 
-- Corporate DNS forwarding and private DNS integration with the existing enterprise network.
-- Regional availability, model availability and quota for Azure AI Foundry and Azure Machine Learning.
-- Final employee authentication and APIM-to-Backend authorization design.
-
-Known limitations of this case-study scaffold:
+- Validate private DNS and end-to-end private connectivity.
+- Confirm that the required AI models, regions and quota are available.
+- Finalise employee sign-in and APIM-to-Backend authentication.
 - The repository provides representative Terraform modules and CI/CD workflows rather than a complete Production implementation.
-- Backup, disaster recovery, RTO/RPO and full operational controls are not implemented in this lightweight design.
 
 The design intentionally documents these dependencies rather than claiming unsupported Production completeness.
