@@ -1,0 +1,21 @@
+workload_subscription_id     = "00000000-0000-0000-0000-000000000000"
+connectivity_subscription_id = "11111111-1111-1111-1111-111111111111"
+unique_suffix                = "example"
+
+container_registry_id  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-aip-dev-platform/providers/Microsoft.ContainerRegistry/registries/acraipdevexample"
+container_registry_url = "https://acraipdevexample.azurecr.io"
+frontend_image          = "frontend:0123456"
+backend_image           = "backend:0123456"
+
+private_dns_zone_ids = {
+  azurewebsites = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-platform-dns/providers/Microsoft.Network/privateDnsZones/privatelink.azurewebsites.net"
+  azure_api     = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/rg-platform-dns/providers/Microsoft.Network/privateDnsZones/privatelink.azure-api.net"
+}
+
+apim_publisher_name  = "Platform Team"
+apim_publisher_email = "platform@example.com"
+
+tags = {
+  cost-centre = "example"
+  owner       = "cloud-platform"
+}

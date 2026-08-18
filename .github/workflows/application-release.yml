@@ -1,0 +1,136 @@
+name: Application Release (Sample)
+
+run-name: Release ${{ github.sha }} to ${{ inputs.environment }}
+
+on:
+  # Application source is not included in this case-study repository. This
+  # manual workflow demonstrates the release contract expected from the future
+  # application repository.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target GitHub Environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+
+permissions:
+  contents: read
+
+concurrency:
+  group: application-release-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  build-publish-deploy:
+    name: Build, scan, publish and deploy
+    runs-on: [self-hosted, linux, x64, azure-private]
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      AZURE_CORE_OUTPUT: none
+      IMAGE_TAG: ${{ github.sha }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      APP_RESOURCE_GROUP: ${{ vars.APP_RESOURCE_GROUP }}
+      FRONTEND_APP_NAME: ${{ vars.FRONTEND_APP_NAME }}
+      BACKEND_APP_NAME: ${{ vars.BACKEND_APP_NAME }}
+      INTERNAL_APP_FQDN: ${{ vars.INTERNAL_APP_FQDN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify application release contract
+        shell: bash
+        run: |
+          test -f src/frontend/Dockerfile
+          test -f src/backend/Dockerfile
+          test -x src/frontend/test.sh
+          test -x src/backend/test.sh
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          src/frontend/test.sh
+          src/backend/test.sh
+
+      - name: Build immutable images
+        shell: bash
+        run: |
+          docker build --pull \
+            --tag "frontend:${IMAGE_TAG}" \
+            src/frontend
+
+          docker build --pull \
+            --tag "backend:${IMAGE_TAG}" \
+            src/backend
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: frontend:${{ env.IMAGE_TAG }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          hide-progress: true
+
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: backend:${{ env.IMAGE_TAG }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          hide-progress: true
+
+      - name: Azure login with release identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_RELEASE }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push images to private ACR
+        shell: bash
+        run: |
+          az acr login --name "${ACR_NAME}"
+
+          docker tag "frontend:${IMAGE_TAG}" \
+            "${ACR_LOGIN_SERVER}/frontend:${IMAGE_TAG}"
+          docker tag "backend:${IMAGE_TAG}" \
+            "${ACR_LOGIN_SERVER}/backend:${IMAGE_TAG}"
+
+          docker push "${ACR_LOGIN_SERVER}/frontend:${IMAGE_TAG}"
+          docker push "${ACR_LOGIN_SERVER}/backend:${IMAGE_TAG}"
+
+      - name: Update App Service image references
+        shell: bash
+        run: |
+          az webapp config container set \
+            --resource-group "${APP_RESOURCE_GROUP}" \
+            --name "${FRONTEND_APP_NAME}" \
+            --container-image-name "${ACR_LOGIN_SERVER}/frontend:${IMAGE_TAG}" \
+            --container-registry-url "https://${ACR_LOGIN_SERVER}"
+
+          az webapp config container set \
+            --resource-group "${APP_RESOURCE_GROUP}" \
+            --name "${BACKEND_APP_NAME}" \
+            --container-image-name "${ACR_LOGIN_SERVER}/backend:${IMAGE_TAG}" \
+            --container-registry-url "https://${ACR_LOGIN_SERVER}"
+
+      - name: Private smoke tests through Application Gateway
+        shell: bash
+        run: |
+          curl --fail-with-body --retry 6 --retry-delay 10 \
+            "https://${INTERNAL_APP_FQDN}/"
+          curl --fail-with-body --retry 6 --retry-delay 10 \
+            "https://${INTERNAL_APP_FQDN}/api/health"

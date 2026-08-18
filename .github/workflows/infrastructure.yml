@@ -1,0 +1,190 @@
+name: Infrastructure
+
+run-name: >-
+  Terraform ${{ inputs.operation || 'validate' }} -
+  ${{ inputs.environment || 'pull-request' }}
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/infrastructure.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target GitHub Environment
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
+      operation:
+        description: Terraform operation
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infrastructure-${{ inputs.environment || github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  validate:
+    name: Format, validate and scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.6"
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Initialise without remote state
+        working-directory: terraform/environments/dev
+        run: terraform init -backend=false -input=false
+
+      - name: Validate representative environment
+        working-directory: terraform/environments/dev
+        run: terraform validate -no-color
+
+      - name: Scan Terraform configuration
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: terraform
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          hide-progress: true
+
+  plan:
+    name: Plan ${{ inputs.environment }}
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'plan'
+    needs: validate
+    runs-on: [self-hosted, linux, x64, azure-private]
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      AZURE_CORE_OUTPUT: none
+      TF_VAR_workload_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_connectivity_subscription_id: ${{ vars.CONNECTIVITY_SUBSCRIPTION_ID }}
+      TF_VAR_unique_suffix: ${{ vars.UNIQUE_SUFFIX }}
+      TF_VAR_container_registry_id: ${{ vars.CONTAINER_REGISTRY_ID }}
+      TF_VAR_container_registry_url: ${{ vars.CONTAINER_REGISTRY_URL }}
+      TF_VAR_frontend_image: ${{ vars.FRONTEND_IMAGE }}
+      TF_VAR_backend_image: ${{ vars.BACKEND_IMAGE }}
+      TF_VAR_private_dns_zone_ids: ${{ vars.PRIVATE_DNS_ZONE_IDS_JSON }}
+      TF_VAR_apim_publisher_name: ${{ vars.APIM_PUBLISHER_NAME }}
+      TF_VAR_apim_publisher_email: ${{ vars.APIM_PUBLISHER_EMAIL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.6"
+          terraform_wrapper: false
+
+      - name: Azure login with plan identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_TERRAFORM_PLAN }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Initialise remote state
+        working-directory: ${{ vars.TF_ROOT }}
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=ai-platform/${{ inputs.environment }}.tfstate" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Terraform plan
+        working-directory: ${{ vars.TF_ROOT }}
+        run: terraform plan -input=false -lock-timeout=5m -no-color
+
+  apply:
+    name: Apply ${{ inputs.environment }}
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'apply'
+    needs: validate
+    runs-on: [self-hosted, linux, x64, azure-private]
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      AZURE_CORE_OUTPUT: none
+      TF_VAR_workload_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_connectivity_subscription_id: ${{ vars.CONNECTIVITY_SUBSCRIPTION_ID }}
+      TF_VAR_unique_suffix: ${{ vars.UNIQUE_SUFFIX }}
+      TF_VAR_container_registry_id: ${{ vars.CONTAINER_REGISTRY_ID }}
+      TF_VAR_container_registry_url: ${{ vars.CONTAINER_REGISTRY_URL }}
+      TF_VAR_frontend_image: ${{ vars.FRONTEND_IMAGE }}
+      TF_VAR_backend_image: ${{ vars.BACKEND_IMAGE }}
+      TF_VAR_private_dns_zone_ids: ${{ vars.PRIVATE_DNS_ZONE_IDS_JSON }}
+      TF_VAR_apim_publisher_name: ${{ vars.APIM_PUBLISHER_NAME }}
+      TF_VAR_apim_publisher_email: ${{ vars.APIM_PUBLISHER_EMAIL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.14.6"
+          terraform_wrapper: false
+
+      - name: Azure login with apply identity
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID_TERRAFORM_APPLY }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Initialise remote state
+        working-directory: ${{ vars.TF_ROOT }}
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=ai-platform/${{ inputs.environment }}.tfstate" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Create final plan
+        working-directory: ${{ vars.TF_ROOT }}
+        run: terraform plan -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Apply approved plan
+        working-directory: ${{ vars.TF_ROOT }}
+        run: terraform apply -input=false -lock-timeout=5m tfplan
