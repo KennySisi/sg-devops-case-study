@@ -4,114 +4,118 @@
 
 This repository presents a lightweight design for a secure internal employee AI application on Azure.
 
-Application Gateway WAF_v2 provides the private application entry point, API Management (APIM) provides API governance, and separate Azure App Services host the frontend and backend API. Storage, Cosmos DB, Key Vault, Azure Container Registry (ACR), Azure AI Foundry and Azure Machine Learning are accessed through Private Endpoints wherever supported.
+**Key design principles:** private-by-default connectivity, least-privilege access, and a repeatable deployment model.
 
-The platform uses Terraform and GitHub Actions with OIDC workload identity federation. Managed Identities and least-privilege access replace long-lived Azure credentials wherever possible. The design focuses on the workload spokes and consumes the organisation's existing Azure Landing Zone capabilities.
+Application Gateway WAF_v2 provides the private application entry point. API Management (APIM) provides API governance. Separate Azure App Services host the frontend and backend API. Storage, Cosmos DB, Key Vault, Azure Container Registry (ACR), Azure AI Foundry and Azure Machine Learning use Private Endpoints wherever supported.
+
+Terraform defines the workload infrastructure, while GitHub Actions provides CI/CD using OIDC workload identity federation. The design focuses on workload spokes and consumes the organisation's existing Azure Landing Zone capabilities.
 
 ## Assumptions
 
 - An Azure Landing Zone and Microsoft Entra ID already exist.
-- The organisation uses hub-and-spoke VNets connected through VNet peering.
-- Corporate users reach Azure through existing private connectivity such as ExpressRoute or site-to-site VPN.
-- Private DNS Zones are centrally managed in the connectivity subscription and linked to the workload spoke VNets.
-- Existing Azure Policy and monitoring capabilities provide the organisation-wide governance and diagnostic baseline.
-- The frontend and backend applications are packaged as container images and stored in ACR.
+- Hub-and-spoke networking and private corporate connectivity to Azure already exist.
+- Private DNS Zones are centrally managed.
+- Existing Azure Policy and monitoring provide the enterprise governance baseline.
+- Frontend and backend applications are packaged as container images and stored in ACR.
+- Development, UAT and Production follow the same architecture pattern with separate workload resources, identities and data.
 
 ## 1. High-Level Architecture
 
 ![Azure internal AI platform architecture](diagrams/architecture.png)
 
-The platform is internal and private-by-default. Application Gateway provides WAF inspection and Layer 7 routing. APIM applies API policies before requests reach the backend. The frontend and backend use separate App Services so that they can have different identities, access permissions and deployment lifecycles.
+**Key point:** follow the request from the employee to the application, then to the backend data and AI services.
 
-### Main Traffic Flows
+| Flow | Path |
+|---|---|
+| UI traffic | Employee → Application Gateway → Frontend App Service |
+| API traffic | Employee/Frontend → Application Gateway → APIM → Backend App Service |
+| Backend access | Backend App Service → VNet Integration → Private Endpoints → Data / AI services |
+| Deployment | GitHub Actions → OIDC → Azure; private-networked runner where private endpoint access is required |
 
-| Flow | Path | Purpose |
-|---|---|---|
-| UI traffic | Employee → Corporate DNS/network → Application Gateway → Frontend App Service | Provides private access to the employee web application. |
-| API traffic | Employee/Frontend → Application Gateway → APIM → Backend App Service | Applies WAF inspection, routing and API governance before requests reach the backend. |
-| Backend access | Backend App Service → VNet Integration → Private Endpoints → Data and AI services | Keeps workload data-plane traffic on private paths. |
-| Deployment | GitHub Actions → OIDC → Azure control plane; private-networked runner → ACR and internal endpoints where required | Provides secretless infrastructure and application deployment. |
+Application Gateway provides WAF inspection and Layer 7 routing:
 
-Application Gateway uses path-based routing:
+- UI traffic goes to the Frontend App Service through its Private Endpoint.
+- API traffic goes to APIM through its Private Endpoint.
+- APIM uses VNet Integration for outbound connectivity to the Backend App Service Private Endpoint.
+- The Backend App Service uses VNet Integration to access approved data and AI services through their Private Endpoints.
 
-- `/` and UI routes go to the Frontend App Service Private Endpoint.
-- `/api/*` goes to the APIM Gateway Private Endpoint.
-- APIM uses outbound VNet Integration to reach the Backend App Service Private Endpoint.
-- The Backend App Service uses VNet Integration for approved outbound access to private data and AI services.
+**Design summary:** the application traffic stays on private network paths end to end.
 
 ## 2. Networking Design
 
-Each environment uses a spoke VNet connected to the existing enterprise hub. Address ranges are allocated through the Landing Zone/IPAM process.
+Each environment uses its own spoke VNet connected to the existing enterprise hub. Address ranges are allocated through the Landing Zone / IPAM process.
 
 ### Network Segmentation
 
-| Subnet | Purpose | Key configuration |
-|---|---|---|
-| Application Gateway subnet | Hosts Application Gateway WAF_v2 | Dedicated subnet, private frontend IP and NSG controls. |
-| APIM integration subnet | Provides APIM outbound access to the private backend | Dedicated subnet for APIM Standard v2 VNet Integration. |
-| App Service integration subnet | Provides App Service outbound access to private ACR and approved data/AI dependencies | Delegated to `Microsoft.Web/serverFarms`; NSG controls approved outbound paths. |
-| Private Endpoint subnet | Hosts Private Endpoint NICs for APIM, App Services and Azure PaaS/AI services | Central workload PE subnet. Private Endpoint network policies can be enabled where additional NSG/UDR enforcement is required. |
+| Subnet | Purpose |
+|---|---|
+| Application Gateway subnet | Private application entry point and WAF |
+| APIM integration subnet | APIM outbound VNet Integration |
+| App Service integration subnet | App Service outbound VNet Integration |
+| Private Endpoint subnet | Private Endpoints for APIM, App Services and Azure PaaS / AI services |
 
-APIM Standard v2 combines an inbound Gateway Private Endpoint with outbound VNet Integration. App Service Private Endpoints provide inbound connectivity, while App Service VNet Integration provides outbound connectivity.
+**Key networking distinction:**
 
-### Traffic Controls
+- **Private Endpoint = private inbound access**
+- **VNet Integration = outbound access into the VNet**
 
-NSGs and subnet separation restrict traffic to the application paths and platform dependencies required by the design:
+NSGs and routing restrict traffic to the required application paths and approved platform dependencies.
 
-- Corporate users reach the Application Gateway private frontend through the existing hub connectivity.
-- Application Gateway reaches the Frontend App Service and APIM through their Private Endpoints.
-- APIM reaches the Backend App Service through VNet Integration and the Backend App Service Private Endpoint.
-- The Backend App Service reaches ACR and approved data/AI services through VNet Integration and Private Endpoints.
-
-Network reachability and authorization are both required. A Private Endpoint does not authorize a caller, and a Managed Identity role does not bypass DNS, routing or NSG controls.
+Network reachability and authorization are separate controls. A Private Endpoint makes a service privately reachable, but it does not authorize the caller.
 
 ### Private DNS
 
-Private DNS is used to support Private Endpoint connectivity for the workload services.
+Private DNS supports Private Endpoint connectivity for workload services.
 
-Private DNS Zones are centrally managed and linked to the workload VNets where required. When a Private Endpoint is created, the corresponding service DNS record is associated with the appropriate privatelink zone.
+Private DNS Zones are centrally managed and linked to workload VNets where required. Applications continue to use standard Azure service FQDNs, which resolve to the corresponding Private Endpoint IP addresses.
 
-Applications continue to use the standard Azure service FQDNs. DNS resolution maps those names to the Private Endpoint IP addresses, so traffic reaches services such as App Service, Storage, Key Vault, Cosmos DB and ACR over private network paths.
-
-For the internal application entry point, ai.slatergordon.com resolves to the private frontend IP of Application Gateway.
+For the internal application entry point, `ai.slatergordon.com` resolves to the private frontend IP of Application Gateway.
 
 ### Ingress and Egress
 
-The application has no intended direct public entry point. Corporate traffic enters through the private Application Gateway frontend. Public network access is disabled or restricted on supported workload services after private DNS and connectivity are validated.
+The application has no intended direct public entry point. Public network access is disabled or restricted on supported workload services after private connectivity is validated.
 
-Data and AI dependencies use Private Endpoints wherever supported. Any required Internet-bound traffic follows the existing controlled path:
+Required Internet-bound traffic follows the existing controlled egress path:
 
 `Workload Spoke → Hub → Azure Firewall → Approved External Destinations`
 
 ## 3. Identity and Security
 
-Managed Identity is used for Azure workloads, while GitHub Actions authenticates through OIDC workload identity federation. Permissions are scoped to the smallest practical resource, container, database or project.
+**Key point:** separate user identity, workload identity and deployment identity.
 
-| Identity | Used by | Required access |
-|---|---|---|
-| Frontend App Service Managed Identity | Frontend App Service | ACR pull access for the frontend image only. No direct data-service access. |
-| Backend App Service Managed Identity | Backend App Service | Backend ACR pull; least-privilege Storage and Cosmos DB data access; Key Vault access only where required; minimum Azure AI Foundry and Azure ML invocation permissions. |
-| Application Gateway Managed Identity | Application Gateway | `Key Vault Secrets User` only when retrieving the HTTPS listener certificate from Key Vault. |
-| APIM Managed Identity | API Management | Backend API application permission, for example `BackendApi.Invoke`. No direct downstream data-service access. |
-| Terraform plan identity | GitHub Actions/OIDC | Read access to the target environment and access to the Terraform state backend. |
-| Terraform apply identity | GitHub Actions/OIDC | `Contributor` on the target environment plus narrowly scoped RBAC administration where Terraform creates role assignments. |
-| Application release identity | GitHub Actions/OIDC | ACR push access and deployment access to the target App Services. |
+### User Identity
 
-Employee Entra SSO and APIM-to-Backend application authentication are target Production controls, but they are not claimed as fully implemented by this lightweight infrastructure scaffold.
+Employees authenticate using Microsoft Entra ID. The final employee sign-in and application authorization model is a Production design item.
 
-Security is implemented as defence in depth:
+### Workload Identity
 
-- **Application edge:** Application Gateway WAF_v2 inspects inbound HTTP/S traffic, while APIM applies API controls such as authentication/authorization policies, rate limits, request limits and controlled logging.
-- **Network:** Private frontend IPs, Private Endpoints, NSGs and the hub firewall minimise public exposure and lateral connectivity.
-- **Identity:** Managed Identities and least-privilege access control protect service-to-service access independently of the network path.
-- **Secrets:** Key Vault stores only credentials and certificates that cannot be eliminated. ACR admin credentials are disabled.
-- **Governance:** Existing Landing Zone policies provide the baseline. Workload-specific controls audit or restrict public network access, Private Link posture and diagnostic settings where appropriate. New controls would normally be validated in Audit mode before stronger enforcement is enabled.
-- **Monitoring and data protection:** Diagnostic telemetry is sent to the existing central monitoring platform. Sensitive prompt or legal content is not logged by default.
-- **Software supply chain:** CI/CD scans application images and deploys immutable commit tags or digests rather than `latest`.
+Azure workloads use Managed Identities and least-privilege access.
+
+| Identity | Main purpose |
+|---|---|
+| Frontend App Service MI | Pull frontend image from ACR; no direct data-service access |
+| Backend App Service MI | Pull backend image and access approved Storage, Cosmos DB, Key Vault and AI services |
+| Application Gateway MI | Access Key Vault certificate if required |
+| APIM MI | Can be used for Production APIM-to-Backend authentication |
+
+### Deployment Identity
+
+GitHub Actions authenticates to Azure through OIDC workload identity federation, avoiding long-lived Azure client secrets.
+
+Security is implemented using defence in depth:
+
+- **Application edge:** Application Gateway WAF and APIM API controls.
+- **Network:** private frontend IPs, Private Endpoints, NSGs and Hub firewall.
+- **Identity:** Managed Identities and least-privilege access.
+- **Secrets:** Key Vault only where secrets or certificates cannot be eliminated.
+- **Governance:** existing Azure Policy and central monitoring.
+- **Supply chain:** image scanning and immutable image tags / digests.
 
 ## 4. Terraform Design
 
-Terraform uses reusable service modules with thin environment compositions. Resource definitions remain in `modules`; environment folders contain environment-specific values, provider configuration and module wiring.
+**Key point:** reusable Terraform modules with environment-specific configuration.
+
+The repository contains representative modules for:
 
 ```text
 terraform/
@@ -126,51 +130,45 @@ terraform/
     └── prod/
 ```
 
-Each environment has separate Terraform state, configuration and deployment identity. Provider configuration remains at the environment layer so that workload and shared connectivity subscriptions are addressed explicitly.
+Development demonstrates how the modules are composed. UAT and Production reuse the same pattern with separate configuration, Terraform state and deployment identities.
 
-Terraform manages workload resources and RBAC assignments, while access to centrally managed Private DNS is granted only where required.
+Terraform manages representative workload resources and RBAC assignments. Access to shared resources such as centrally managed Private DNS is granted only where required.
 
-The repository provides four representative modules; Application Gateway, data, AI and other service modules would follow the same `main.tf`, `variables.tf`, `outputs.tf` contract. They are intentionally omitted rather than attempting to rebuild the Azure Landing Zone or implement every Production setting.
+This repository is intentionally a lightweight scaffold. It demonstrates the architecture, module boundaries and deployment pattern rather than implementing every Production setting or rebuilding the existing Azure Landing Zone.
 
 ## 5. GitHub Actions CI/CD
 
+**Key point:** infrastructure deployment and application release are separate workflows.
+
 GitHub Actions uses OIDC federation, so no long-lived Azure client secret is stored in GitHub.
-
-The repository includes representative [infrastructure](.github/workflows/infrastructure.yml) and [application release](.github/workflows/application-release.yml) workflows. Their required GitHub Environments, variables and private-runner contract are documented in the [workflow notes](.github/workflows/README.md).
-
-Standard GitHub-hosted runners can perform checkout, unit tests, linting and Terraform formatting/validation when no private endpoint access is required. Jobs that must reach private-only data-plane endpoints use a runner with Azure private network connectivity. This design uses an ephemeral self-hosted runner connected to an approved Azure subnet; GitHub-hosted runners with Azure private networking are also a valid enterprise alternative.
 
 ### Infrastructure Pipeline
 
 ```text
-Pull Request
-→ terraform fmt / validate
-→ security checks
-
-Selected environment
-→ GitHub OIDC with plan identity
-→ terraform plan
-
-Approved environment
-→ GitHub OIDC with apply identity
-→ final plan and terraform apply
+Terraform fmt / validate
+→ Security checks
+→ Terraform plan
+→ Review
+→ Manual approval for UAT / Production
+→ Terraform apply
 ```
-
-- Plan and apply use separate federated identities.
-- UAT and Production use GitHub Environment approvals.
-- State and deployment permissions are separated by environment.
-- Terraform apply uses environment-scoped infrastructure permissions plus narrowly scoped RBAC administration where Terraform creates role assignments.
 
 ### Application Release Pipeline
 
 ```text
-Build → Unit Test → Image Scan → Push immutable image to ACR
-→ Update App Service image reference → Private smoke test
+Build
+→ Unit test
+→ Image scan
+→ Push immutable image to ACR
+→ Update App Service image
+→ Private smoke test
 ```
 
-Build and unit tests can use a standard GitHub-hosted runner. ACR push and internal smoke tests use the private-networked runner.
+Jobs that need access to private ACR or internal application endpoints require Azure private network connectivity.
 
-Updating the App Service image reference uses the Azure control plane. The App Services then authenticate to ACR with their Managed Identities and pull the images through VNet Integration and the ACR Private Endpoint.
+GitHub-hosted runners with Azure private networking are the preferred option because they reduce runner-management overhead. Self-hosted runners remain an alternative where greater infrastructure control is required.
+
+**Remember:** OIDC solves Azure authentication; the private-networked runner solves private network connectivity.
 
 ## 6. Key Design Trade-offs
 
@@ -178,28 +176,26 @@ Updating the App Service image reference uses the Azure control plane. The App S
 
 Standard v2 is selected because its inbound Private Endpoint and outbound VNet Integration meet the current requirements at lower cost.
 
-The trade-off is a more complex networking model. Premium v2 provides a more fully integrated VNet model, but at higher cost.
+**Trade-off:** Standard v2 has a more complex networking model. Premium v2 provides a more fully integrated VNet model, but at higher cost.
 
 ### Private Deployment Runner
 
-GitHub-hosted runners with Azure private networking are the preferred option because they can access private ACR and internal endpoints with less runner-management overhead.
+GitHub-hosted runners with Azure private networking reduce runner-management overhead while still providing access to private ACR and internal endpoints.
 
-The trade-off is less infrastructure control and dependency on the organisation's GitHub plan and platform standards. Self-hosted runners provide more control but require more maintenance.
+**Trade-off:** GitHub-hosted runners provide less infrastructure control. Self-hosted runners provide more control but require more operational maintenance.
 
-The final choice would depend on the organisation’s GitHub plan, security policy, cost and platform standards.
+The final choice depends on the organisation's GitHub setup, security policy, cost and platform standards.
 
 ### Environment Isolation vs Cost
 
 Development, UAT and Production use separate workload resources, identities and data.
 
-This reduces blast radius and provides a stronger Production boundary, but increases resource duplication and cost.
+**Trade-off:** stronger isolation and a smaller blast radius, at the cost of duplicated workload resources and higher cost.
 
-## 7. Known Risks and Limitations
-
-Key Considerations Before Production:
+## 7. Key Considerations Before Production
 
 - Validate private DNS and end-to-end private connectivity.
-- Confirm the production requirements for Azure AI Foundry and Azure Machine Learning, including model and regional availability, quota, networking and outbound dependencies.
+- Confirm the final Azure AI Foundry / Azure Machine Learning Production configuration, including region, model availability, quota, networking and outbound requirements.
 - Finalise employee sign-in and APIM-to-Backend authentication.
 - The repository provides representative Terraform modules and CI/CD workflows rather than a complete Production implementation.
 
