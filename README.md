@@ -186,12 +186,6 @@ GitHub-hosted runners with Azure private networking reduce runner-management ove
 
 The final choice depends on the organisation's GitHub setup, security policy, cost and platform standards.
 
-### Environment Isolation vs Cost
-
-Development, UAT and Production use separate workload resources, identities and data.
-
-**Trade-off:** stronger isolation and a smaller blast radius, at the cost of duplicated workload resources and higher cost.
-
 ## 7. Key Considerations Before Production
 
 - Validate private DNS and end-to-end private connectivity.
