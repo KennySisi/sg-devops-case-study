@@ -199,7 +199,7 @@ This reduces blast radius and provides a stronger Production boundary, but incre
 Key Considerations Before Production:
 
 - Validate private DNS and end-to-end private connectivity.
-- Confirm that the required AI models, regions and quota are available.
+- Confirm the production requirements for Azure AI Foundry and Azure Machine Learning, including model and regional availability, quota, networking and outbound dependencies.
 - Finalise employee sign-in and APIM-to-Backend authentication.
 - The repository provides representative Terraform modules and CI/CD workflows rather than a complete Production implementation.
 
