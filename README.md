@@ -17,7 +17,6 @@ Terraform defines the workload infrastructure, while GitHub Actions provides CI/
 - Private DNS Zones are centrally managed.
 - Existing Azure Policy and monitoring provide the enterprise governance baseline.
 - Frontend and backend applications are packaged as container images and stored in ACR.
-- Development, UAT and Production follow the same architecture pattern with separate workload resources, identities and data.
 
 ## 1. High-Level Architecture
 
